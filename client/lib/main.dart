@@ -4,6 +4,8 @@ import 'package:dash_chat_2/dash_chat_2.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:web_socket_channel/status.dart' as status;
 
 late final SharedPreferences sharedPrefs;
 Future<void> main() async {
@@ -42,6 +44,55 @@ class _ChatUIState extends State<ChatUI> {
     setState(() {
       _currentUser = ChatUser.fromJson(jsonDecode(_savedUser));
     });
+    _initSocket();
+  }
+
+  final List<ChatMessage> _messages = [];
+  late final WebSocketChannel _channel;
+  bool _socketInitialized = false;
+
+  void _initSocket() {
+    if (_socketInitialized) return;
+    _socketInitialized = true;
+
+    _channel = WebSocketChannel.connect(
+      Uri.parse('ws://192.168.0.125:8080'),
+    );
+
+    _channel.stream.listen(
+      (data) {
+        final decoded = jsonDecode(data as String);
+        if (decoded is List) {
+          final history = decoded
+              .map((item) => ChatMessage.fromJson(item as Map<String, dynamic>))
+              .toList()
+              .cast<ChatMessage>();
+          setState(() {
+            _messages.clear();
+            _messages.addAll(history.reversed);
+          });
+        } else if (decoded is Map<String, dynamic>) {
+          final msg = ChatMessage.fromJson(decoded);
+          setState(() {
+            _messages.insert(0, msg);
+          });
+        }
+      },
+      onDone: () {
+        // TODO: try reconnect
+      },
+      onError: (_) {
+        // TODO: show error / retry
+      },
+    );
+  }
+
+  void _handleSend(ChatMessage msg) {
+    final outbound = msg.copyWith(
+      user: _currentUser!,
+      createdAt: DateTime.now(),
+    );
+    _channel.sink.add(jsonEncode(outbound.toJson()));
   }
 
   @override
@@ -50,6 +101,14 @@ class _ChatUIState extends State<ChatUI> {
       initUser();
     });
     super.initState();
+  }
+
+  @override
+  void dispose() {
+    if (_socketInitialized) {
+      _channel.sink.close(status.goingAway);
+    }
+    super.dispose();
   }
 
   @override
@@ -75,11 +134,9 @@ class _ChatUIState extends State<ChatUI> {
             )
           : DashChat(
               currentUser: _currentUser!,
-              onSend: (message) {},
-              messages: [],
-              inputOptions: const InputOptions(
-                alwaysShowSend: true,
-              ),
+              messages: _messages,
+              onSend: _handleSend,
+              inputOptions: const InputOptions(alwaysShowSend: true),
             ),
     );
   }
@@ -95,6 +152,7 @@ class _ChatUIState extends State<ChatUI> {
         _currentUser = _result;
         sharedPrefs.setString('user', jsonEncode(_result.toJson()));
       });
+      _initSocket();
     }
   }
 }
@@ -162,6 +220,32 @@ class _UserCreationDialogState extends State<UserCreationDialog> {
           );
         },
       ),
+    );
+  }
+}
+
+extension on ChatMessage {
+  ChatMessage copyWith({
+    ChatUser? user,
+    DateTime? createdAt,
+    String? text,
+    List<ChatMedia>? medias,
+    List<QuickReply>? quickReplies,
+    Map<String, dynamic>? customProperties,
+    List<Mention>? mentions,
+    MessageStatus? status,
+    ChatMessage? replyTo,
+  }) {
+    return ChatMessage(
+      user: user ?? this.user,
+      createdAt: createdAt ?? this.createdAt,
+      text: text ?? this.text,
+      medias: medias ?? this.medias,
+      quickReplies: quickReplies ?? this.quickReplies,
+      customProperties: customProperties ?? this.customProperties,
+      mentions: mentions ?? this.mentions,
+      status: status ?? this.status,
+      replyTo: replyTo ?? this.replyTo,
     );
   }
 }
