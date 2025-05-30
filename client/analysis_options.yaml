@@ -1,0 +1,6 @@
+include: package:flutter_lints/flutter.yaml
+formatter: 
+  trailing_commas: preserve
+analyzer:
+  errors:
+    no_leading_underscores_for_local_identifiers: ignore
