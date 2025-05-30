@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dash_chat_2/dash_chat_2.dart';
@@ -47,6 +48,7 @@ class _ChatUIState extends State<ChatUI> {
     _initSocket();
   }
 
+  final List<ChatUser> _typingUsers = [];
   final List<ChatMessage> _messages = [];
   late final WebSocketChannel _channel;
   bool _socketInitialized = false;
@@ -56,26 +58,41 @@ class _ChatUIState extends State<ChatUI> {
     _socketInitialized = true;
 
     _channel = WebSocketChannel.connect(
-      Uri.parse('ws://192.168.0.125:8080'),
+      Uri.parse('wss://ee03-103-180-245-250.ngrok-free.app'),
     );
 
     _channel.stream.listen(
       (data) {
         final decoded = jsonDecode(data as String);
-        if (decoded is List) {
-          final history = decoded
-              .map((item) => ChatMessage.fromJson(item as Map<String, dynamic>))
-              .toList()
-              .cast<ChatMessage>();
-          setState(() {
-            _messages.clear();
-            _messages.addAll(history.reversed);
-          });
-        } else if (decoded is Map<String, dynamic>) {
-          final msg = ChatMessage.fromJson(decoded);
-          setState(() {
-            _messages.insert(0, msg);
-          });
+        final type = decoded['type'];
+
+        if (type == 'typing') {
+          final users = (decoded['users'] as List)
+              .map((j) => ChatUser.fromJson(j as Map<String, dynamic>))
+              .toList();
+          setState(
+            () => _typingUsers
+              ..clear()
+              ..addAll(users),
+          );
+        } else if (type == 'message') {
+          if (decoded is List) {
+            final history = decoded
+                .map(
+                  (item) => ChatMessage.fromJson(item as Map<String, dynamic>),
+                )
+                .toList()
+                .cast<ChatMessage>();
+            setState(() {
+              _messages.clear();
+              _messages.addAll(history.reversed);
+            });
+          } else if (decoded is Map<String, dynamic>) {
+            final msg = ChatMessage.fromJson(decoded);
+            setState(() {
+              _messages.insert(0, msg);
+            });
+          }
         }
       },
       onDone: () {
@@ -93,6 +110,31 @@ class _ChatUIState extends State<ChatUI> {
       createdAt: DateTime.now(),
     );
     _channel.sink.add(jsonEncode(outbound.toJson()));
+  }
+
+  Timer? _typingTimer;
+  bool _isTyping = false;
+
+  void _sendTyping(bool isTyping) {
+    _channel.sink.add(
+      jsonEncode({
+        'type': 'typing',
+        'user': _currentUser!.toJson(),
+        'isTyping': isTyping,
+      }),
+    );
+    _isTyping = isTyping;
+  }
+
+  void _onTextChanged(String text) {
+    if (!_isTyping) {
+      _sendTyping(true);
+    }
+    _typingTimer?.cancel();
+    // after 2s of no typing→ send stop
+    _typingTimer = Timer(const Duration(seconds: 2), () {
+      _sendTyping(false);
+    });
   }
 
   @override
@@ -136,7 +178,32 @@ class _ChatUIState extends State<ChatUI> {
               currentUser: _currentUser!,
               messages: _messages,
               onSend: _handleSend,
-              inputOptions: const InputOptions(alwaysShowSend: true),
+              inputOptions: InputOptions(
+                alwaysShowSend: true,
+                onTextChange: _onTextChanged,
+              ),
+              messageOptions: MessageOptions(
+                userNameBuilder: (user) {
+                  return Text(
+                    user.customProperties?['username'] ?? 'Anonymous',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue,
+                    ),
+                  );
+                },
+              ),
+              messageListOptions: MessageListOptions(
+                typingBuilder: (user) {
+                  if (user.id == _currentUser!.id) {
+                    return const SizedBox.shrink();
+                  }
+                  return Text(
+                    "${user.customProperties?['username'] ?? 'Anonymous'} is typing...",
+                  );
+                },
+              ),
+              typingUsers: _typingUsers,
             ),
     );
   }

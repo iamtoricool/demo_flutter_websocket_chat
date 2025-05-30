@@ -5,6 +5,7 @@ import 'models.dart';
 
 final List<WebSocket> _clients = [];
 final List<ChatMessage> _history = [];
+final Set<ChatUser> _typingUsers = {};
 
 Future<void> main() async {
   final server = await HttpServer.bind(
@@ -33,15 +34,43 @@ void _handleConnection(WebSocket socket) {
 
   // Send history to newly connected client
   for (var msg in _history) {
-    socket.add(jsonEncode(msg.toJson()));
+    socket.add(jsonEncode({'type': 'message', ...msg.toJson()}));
   }
 
   socket.listen(
     (dynamic data) {
       try {
         final incoming = jsonDecode(data as String) as Map<String, dynamic>;
+
+        // 1) TYPING EVENTS: handle & return immediately
+        if (incoming['type'] == 'typing') {
+          final user = ChatUser.fromJson(
+            incoming['user'] as Map<String, dynamic>,
+          );
+          final isTyping = incoming['isTyping'] == true;
+
+          if (isTyping) {
+            _typingUsers.add(user);
+          } else {
+            _typingUsers.removeWhere((u) => u.id == user.id);
+          }
+
+          final payload = jsonEncode({
+            'type': 'typing',
+            'users': _typingUsers.map((u) => u.toJson()).toList(),
+          });
+
+          for (var c in _clients) {
+            if (c.readyState == WebSocket.open) c.add(payload);
+          }
+          return;
+        }
+
+        // 2) CHAT MESSAGES: now safe to parse into ChatMessage
+        //    (we wrap createdAt parsing to default to now if missing)
         final msg = ChatMessage.fromJson(incoming);
 
+        // Stamp server time if the client didn’t send one
         if (incoming['createdAt'] == null) {
           msg.createdAt = DateTime.now().toLocal();
         }
@@ -49,15 +78,16 @@ void _handleConnection(WebSocket socket) {
         // Store in history
         _history.add(msg);
 
-        final outJson = jsonEncode(msg.toJson());
+        // Broadcast as a message‐typed envelope
+        final out = jsonEncode({'type': 'message', ...msg.toJson()});
 
         for (var c in List<WebSocket>.from(_clients)) {
           if (c.readyState == WebSocket.open) {
-            c.add(outJson);
+            c.add(out);
           }
         }
-      } catch (e) {
-        print('⚠️ Error handling message: $e');
+      } catch (e, st) {
+        print('⚠️ Error handling message: $e\n$st');
       }
     },
     onDone: () {
