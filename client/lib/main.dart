@@ -58,7 +58,7 @@ class _ChatUIState extends State<ChatUI> {
     _socketInitialized = true;
 
     _channel = WebSocketChannel.connect(
-      Uri.parse('wss://ee03-103-180-245-250.ngrok-free.app'),
+      Uri.parse('wss:http://localhost:8080'),
     );
 
     _channel.stream.listen(
